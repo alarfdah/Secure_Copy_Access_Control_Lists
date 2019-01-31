@@ -1,0 +1,16 @@
+done 1. A command with improper syntax.
+____ 2. A get command where <destination> is not writable by user.
+        get should emit the error get: <destination> not writable by user.
+        Note that the file may or may not exist and existence is not required
+        for the command to succeed.
+done 3. <source> does not exist.
+done 4. owner does not own <source>.
+done 5. owner does not have read access to <source>.
+done 6. There is no <source>.acl file.
+____ 7. <source>.acl is malformed.
+done 8. <source>.acl is not owned by owner.
+done 9. <source>.acl has group or world permissions set.
+done 10. Either <source> or <destination> is a symbolic link.
+done 11. user does not have an entry in <source>.acl.
+____ 12. <source> is in the wrong directory or is not a full path.
+____ 13. <destination> is in the wrong directory or is not a full path.
