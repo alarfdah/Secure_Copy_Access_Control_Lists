@@ -14,7 +14,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <pwd.h>
-#include <grp.h>
+#include <ctype.h>
 
 void add_forward_slash(char **dst, int *dst_len) {
 	if (strncmp((*dst) + (*dst_len) - 1, "/", 1) != 0) {
@@ -51,7 +51,7 @@ void check_file_permissions(char *src, int perms[]) {
 	struct stat file_stat;
 
 	assert(lstat(src, &file_stat) != -1 && "check_file_permissions lstat failed!");
-	
+
 	// Set permissions
 	if (file_stat.st_mode & S_IRUSR) perms[0] = 1;
 	if (file_stat.st_mode & S_IWUSR) perms[1] = 1;
@@ -97,7 +97,42 @@ void check_if_acl_has_group_or_world_permissions(char *filename, int perms[]) {
 
 // TODO
 void check_if_acl_is_malformed(char *string) {
+	char *token;
+	char *delim = ",";
+	int tok_len;
+	int sum;
+	int i;
 
+	token = strtok(string, delim);
+	assert(token != NULL && "Token is null!");
+
+	while (token != NULL) {
+		// Check token length
+		tok_len = strlen(token);
+		assert(tok_len > 0 && "Token is empty!");
+
+		// Check if malformed
+		for (i = 0; i < tok_len; i++) {
+			if (isalpha(token[i])) {
+				sum++;
+			} else if (isdigit(token[i])) {
+				sum++;
+			} else if (token[i] == '\n') {
+				sum++;
+			}
+		}
+
+		if (sum != tok_len) {
+			printf("\"%s\" is malformed!\n", string);
+			printf("token: %s\n", token);
+			printf("sum: %d, tok_len: %d\n", sum, tok_len);
+			exit(-1);
+		}
+		sum = 0;
+
+		// Grab next token
+		token = strtok(NULL, delim);
+	}
 }
 
 void check_if_full_path(char *path) {
@@ -107,6 +142,47 @@ void check_if_full_path(char *path) {
 	}
 }
 
+void check_if_correct_source_path(char *path) {
+	uid_t uid, euid, suid;
+	struct passwd *pw;
+	char *full_path;
+	char *user;
+	int full_path_len;
+	int user_len;
+
+	// GETRESUID
+	assert(getresuid(&uid, &euid, &suid) != -1 && "getresuid() failed!");
+
+	// Get name corresponding to suid
+	pw = getpwuid(suid);
+	assert(pw != NULL && "passwd struct (suid) is NULL!");
+
+	// Copy name
+	user_len = strlen(pw->pw_name);
+	assert(user_len > 0 && "user_len is not > 0!");
+	user = malloc(user_len + 1);
+	assert(user != NULL && "user malloc is NULL!");
+	assert(strncpy(user, pw->pw_name, user_len) != NULL && "strncpy on user is NULL!");
+
+	// Malloc full_path ("/home/[user]/files/\0")
+	full_path_len = 6 + user_len + 6;
+	full_path = malloc(full_path_len + 1);
+	assert(full_path != NULL && "full_path is NULL!");
+
+	// Create full_path
+	assert(strncat(full_path, "/home/", 6) != NULL && "strncat failed!");
+	assert(strncat(full_path, user, user_len) != NULL && "strncat failed!");
+	
+	assert(strncat(full_path, "/files", 6) != NULL && "strncat failed!");
+
+	// Compare
+	if (strncmp(path, full_path, full_path_len) != 0) {
+		printf("%s is the wrong directory! Should be: %s/...\n", path, full_path);
+		exit(-1);
+	}
+
+}
+
 void check_if_owner_has_read_permissions(int perms[]) {
 	uid_t uid, euid, suid;
 	struct passwd *pw;
@@ -114,6 +190,7 @@ void check_if_owner_has_read_permissions(int perms[]) {
 	// Get owner name
 	assert(getresuid(&uid, &euid, &suid) != -1 && "getresuid() failed!");
 	pw = getpwuid(suid);
+	assert(pw != NULL && "passwd struct (suid) is NULL!");
 
 	// Check if owner has read permissions
 	if (perms[0] == 0) {
@@ -124,17 +201,13 @@ void check_if_owner_has_read_permissions(int perms[]) {
 
 void check_if_owner_owns_file(char *path) {
 	uid_t uid, euid, suid;
-	gid_t gid, egid, sgid;
 	char *suid_name, *file_owner;
-	char *sgid_group, *file_group;
-	int suid_name_len, sgid_group_len, file_owner_len, file_group_len, length;
+	int suid_name_len, file_owner_len, length;
 	struct passwd *pw;
-	struct group *gr;
 	struct stat file_stat;
 
 	// GETRESUID & GETRESGID
 	assert(getresuid(&uid, &euid, &suid) != -1 && "getresuid() failed!");
-	assert(getresgid(&gid, &egid, &sgid) != -1 && "getresgid() failed!");
 
 	// Get ID's associated username
 	pw = getpwuid(suid);
@@ -146,17 +219,6 @@ void check_if_owner_owns_file(char *path) {
 	suid_name = malloc(suid_name_len + 1);
 	assert(suid_name != NULL && "suid_name malloc is NULL!");
 	assert(strncpy(suid_name, pw->pw_name, suid_name_len) != NULL && "strncpy on suid_name is NULL!");
-
-	// Get sgid's group name
-	gr = getgrgid(sgid);
-	assert(gr != NULL && "group struct (sgid) is NULL!");
-
-	// Store sgid's group name
-	sgid_group_len = strlen(gr->gr_name);
-	assert(sgid_group_len > 0 && "length is not > 0!");
-	sgid_group = malloc(sgid_group_len + 1);
-	assert(sgid_group != NULL && "sgid_group malloc is NULL!");
-	assert(strncpy(sgid_group, gr->gr_name, sgid_group_len) != NULL && "strncpy on sgid_group is NULL!");
 
 	// fstat the file
 	assert(lstat(path, &file_stat) != -1 && "lstat in \"chech_if_owner_owns_files\" failed!");
@@ -172,22 +234,10 @@ void check_if_owner_owns_file(char *path) {
 	assert(file_owner != NULL && "file_owner malloc is NULL!");
 	assert(strncpy(file_owner, pw->pw_name, file_owner_len) != NULL && "strncpy on file_owner is NULL!");
 
-	// Get the file's associated group
-	gr = getgrgid(file_stat.st_gid);
-	assert(gr != NULL && "passwd struct (st_gid) is NULL!");
-
-	// Store the file's group
-	file_group_len = strlen(gr->gr_name);
-	assert(file_group_len > 0 && "length is not > 0!");
-	file_group = malloc(file_group_len + 1);
-	assert(sgid_group != NULL && "file_group malloc is NULL!");
-	assert(strncpy(file_group, gr->gr_name, file_group_len) != NULL && "strncpy on file_group is NULL!");
 
 	/* UNCOMMENT TO TEST VALUES *
 		printf("Owner  name: %s\n", suid_name);
-		printf("Owner group: %s\n", sgid_group);
 		printf("File  owner: %s\n", file_owner);
-		printf("File  group: %s\n", file_group);
 	*/
 
 	// Find the lesser length
@@ -278,14 +328,44 @@ void make_copy_from_argv(char **path, int *path_len, char **argv, int param) {
 }
 
 void open_file(char *pathname, char *mode, FILE **fptr) {
+	uid_t uid, euid, suid;
+
+	// GIVE POWER!!
+	assert(getresuid(&uid, &euid, &suid) != -1 && "getresuid failed!");
+	assert(seteuid(suid) != -1 && "seteuid(suid) failed!");
+
+	// Open file
+	(*fptr) = fopen(pathname, mode);
+	assert((*fptr) != NULL && "File does not exist!");
+
+	// REMOVE POWER!!
+	assert(seteuid(uid) != -1 && "seteuid(uid) failed!");
+}
+
+void open_file_unprivileged(char *pathname, char *mode, FILE **fptr) {
+	// Open or Create file
 	(*fptr) = fopen(pathname, mode);
 	assert((*fptr) != NULL && "File does not exist!");
 }
 
 void read_file(FILE **ptr, long *size, char **str) {
+	uid_t uid, euid, suid;
+
+	// GIVE POWER!!
+	assert(getresuid(&uid, &euid, &suid) != -1 && "getresuid failed!");
+	assert(seteuid(suid) != -1 && "seteuid failed!");
+
+	// Read file
 	(*str) = malloc((*size) + 1);
 	assert((*str) != NULL && "str malloc failed!");
 	assert(fread((*str), (*size), 1, (*ptr)) != 0 && "fread failed!");
+
+	// REMOVE POWER!!
+	assert(seteuid(uid) != -1 && "seteuid(uid) failed!");
+}
+
+void write_file(FILE **ptr, long size, char *string) {
+	assert(fwrite(string, size, 1, (*ptr)) != 0);
 }
 
 int main(int argc, char **argv) {
@@ -309,6 +389,9 @@ int main(int argc, char **argv) {
 	if (argc != 3)
 		return -1;
 
+	// REMOVE POWER!!
+	assert(seteuid(getuid()) != -1 && "seteuid(getuid()) failed!"); // getuid() claims to always be successful
+
 	// Copy source from argv
 	make_copy_from_argv(&src, &src_len, argv, 1);
 
@@ -323,6 +406,10 @@ int main(int argc, char **argv) {
 
 	// Check if owner owns the srouce file
 	check_if_owner_owns_file(src);
+
+	// Chech if source correct path
+	check_if_full_path(src);
+	check_if_correct_source_path(src);
 
 	// Check if owner has read permissions
 	check_file_permissions(src, src_perms);
@@ -375,14 +462,18 @@ int main(int argc, char **argv) {
 	// Check if destination path ends with "/"
 	add_forward_slash(&dst, &dst_len);
 
+	// Check if destination is correct path
+	check_if_full_path(dst);
+	check_
+
 	// Append filename to destination path
 	append_filename_to_destination(&src, src_len, &dst, dst_len);
 
 	// Open destination file
-	open_file(dst, "w", &fptr);
+	open_file_unprivileged(dst, "w", &fptr);
 
 	// Write to file
-	assert(fwrite(read_string, fsize, 1, fptr) != 0);
+	write_file(&fptr, fsize, read_string);
 
 	// Close destination file
 	assert(fclose(fptr) == 0);

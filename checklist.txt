@@ -7,10 +7,10 @@ done 3. <source> does not exist.
 done 4. owner does not own <source>.
 done 5. owner does not have read access to <source>.
 done 6. There is no <source>.acl file.
-____ 7. <source>.acl is malformed.
+done 7. <source>.acl is malformed.
 done 8. <source>.acl is not owned by owner.
 done 9. <source>.acl has group or world permissions set.
 done 10. Either <source> or <destination> is a symbolic link.
 done 11. user does not have an entry in <source>.acl.
-____ 12. <source> is in the wrong directory or is not a full path.
+done 12. <source> is in the wrong directory or is not a full path.
 ____ 13. <destination> is in the wrong directory or is not a full path.
