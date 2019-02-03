@@ -142,7 +142,7 @@ void check_if_full_path(char *path) {
 	}
 }
 
-void check_if_correct_source_path(char *path) {
+void check_if_correct_path(char *path, int src_or_dst) {
 	uid_t uid, euid, suid;
 	struct passwd *pw;
 	char *full_path;
@@ -154,7 +154,12 @@ void check_if_correct_source_path(char *path) {
 	assert(getresuid(&uid, &euid, &suid) != -1 && "getresuid() failed!");
 
 	// Get name corresponding to suid
-	pw = getpwuid(suid);
+	if (src_or_dst == 0) { // src_or_dst: 0 for src and 1 for dst
+		pw = getpwuid(suid);
+
+	} else {
+		pw = getpwuid(uid);
+	}
 	assert(pw != NULL && "passwd struct (suid) is NULL!");
 
 	// Copy name
@@ -164,16 +169,25 @@ void check_if_correct_source_path(char *path) {
 	assert(user != NULL && "user malloc is NULL!");
 	assert(strncpy(user, pw->pw_name, user_len) != NULL && "strncpy on user is NULL!");
 
-	// Malloc full_path ("/home/[user]/files/\0")
-	full_path_len = 6 + user_len + 6;
-	full_path = malloc(full_path_len + 1);
+	// Malloc full_path ("/home/[user]\0")
+	full_path_len = 6 + user_len;
+
+	if (src_or_dst == 0) { // src_or_dst: 0 for src and 1 for dst
+		// Malloc full_path ("/files")
+		full_path_len += 6;
+	}
+
+	// Malloc was allocating memory with garbage, so my string is, therefore, appended to garbage
+	full_path = calloc(full_path_len + 1, sizeof(char));
 	assert(full_path != NULL && "full_path is NULL!");
 
 	// Create full_path
 	assert(strncat(full_path, "/home/", 6) != NULL && "strncat failed!");
 	assert(strncat(full_path, user, user_len) != NULL && "strncat failed!");
-	
-	assert(strncat(full_path, "/files", 6) != NULL && "strncat failed!");
+
+	if (src_or_dst == 0) { // src_or_dst: 0 for src and 1 for dst
+		assert(strncat(full_path, "/files", 6) != NULL && "strncat failed!");
+	}
 
 	// Compare
 	if (strncmp(path, full_path, full_path_len) != 0) {
@@ -183,7 +197,7 @@ void check_if_correct_source_path(char *path) {
 
 }
 
-void check_if_owner_has_read_permissions(int perms[]) {
+void check_if_owner_has_read_permissions(char *src, int perms[]) {
 	uid_t uid, euid, suid;
 	struct passwd *pw;
 
@@ -194,7 +208,7 @@ void check_if_owner_has_read_permissions(int perms[]) {
 
 	// Check if owner has read permissions
 	if (perms[0] == 0) {
-		printf("%s does not have read permissions!\n", pw->pw_name);
+		printf("%s is not readable by %s!\n", src, pw->pw_name);
 		exit(-1);
 	}
 }
@@ -272,7 +286,7 @@ void check_if_symbolic_link(char *path, char *path_type) {
 	}
 }
 
-void check_if_user_allowed_to_read(char *string) {
+void check_if_user_in_acl(char *string) {
 	uid_t uid;
 	char *token;
 	char *delim = ",";
@@ -310,6 +324,22 @@ void check_if_user_allowed_to_read(char *string) {
 		exit(-1);
 	}
 
+}
+
+void check_if_user_has_write_permissions(char *dst, int perms[]) {
+	uid_t uid, euid, suid;
+	struct passwd *pw;
+
+	// Get owner name
+	assert(getresuid(&uid, &euid, &suid) != -1 && "getresuid() failed!");
+	pw = getpwuid(uid);
+	assert(pw != NULL && "passwd struct (suid) is NULL!");
+
+	// Check if owner has read permissions
+	if (perms[1] == 0) {
+		printf("%s is not writable by %s\n", dst, pw->pw_name);
+		exit(-1);
+	}
 }
 
 void create_acl_path(char *src, int src_len, char **acl, int *acl_len) {
@@ -383,6 +413,7 @@ int main(int argc, char **argv) {
 	long aclsize;
 
 	int src_perms[9] = {0};
+	int dst_perms[9] = {0};
 	int acl_perms[9] = {0};
 
 	// Check that both src and dst are provided
@@ -409,11 +440,11 @@ int main(int argc, char **argv) {
 
 	// Chech if source correct path
 	check_if_full_path(src);
-	check_if_correct_source_path(src);
+	check_if_correct_path(src, 0);
 
 	// Check if owner has read permissions
 	check_file_permissions(src, src_perms);
-	check_if_owner_has_read_permissions(src_perms);
+	check_if_owner_has_read_permissions(src, src_perms);
 
 	// Check if acl file exists
 	create_acl_path(src, src_len, &acl_path, &acl_path_len);
@@ -439,7 +470,7 @@ int main(int argc, char **argv) {
 	check_if_acl_is_malformed(acl_string);
 
 	// Check if user is in acl
-	check_if_user_allowed_to_read(acl_string);
+	check_if_user_in_acl(acl_string);
 
 	// Open source file
 	open_file(src, "r", &fptr);
@@ -464,7 +495,11 @@ int main(int argc, char **argv) {
 
 	// Check if destination is correct path
 	check_if_full_path(dst);
-	check_
+	check_if_correct_path(dst, 1);
+
+	// Check if user has write permissions
+	check_file_permissions(dst, dst_perms);
+	check_if_user_has_write_permissions(dst, dst_perms);
 
 	// Append filename to destination path
 	append_filename_to_destination(&src, src_len, &dst, dst_len);
