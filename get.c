@@ -47,10 +47,21 @@ void append_filename_to_destination(char **src, int src_len,
 	assert(strncat((*dst), filename, filename_len) != NULL && "strncat failed!");
 }
 
-void check_file_permissions(char *src, int perms[]) {
+/**
+	* src_or_dst: 0 for src and 1 for dst
+	* return 1 for true, 0 for false
+	*/
+int check_file_permissions(char *path, int perms[], int src_or_dst) {
 	struct stat file_stat;
 
-	assert(lstat(src, &file_stat) != -1 && "check_file_permissions lstat failed!");
+	// If source and file does not exist
+	if (src_or_dst == 0 && lstat(path, &file_stat) == -1) {
+		printf("check_file_permissions lstat failed, %s does not exist!\n", path);
+		return 0;
+	// If destination and file does not exist
+	} else if (src_or_dst == 1 && lstat(path, &file_stat) == -1) {
+		return 0;
+	}
 
 	// Set permissions
 	if (file_stat.st_mode & S_IRUSR) perms[0] = 1;
@@ -63,6 +74,7 @@ void check_file_permissions(char *src, int perms[]) {
 	if (file_stat.st_mode & S_IWOTH) perms[7] = 1;
 	if (file_stat.st_mode & S_IXOTH) perms[8] = 1;
 
+	return 1;
 }
 
 void check_file_size(FILE **ptr, long *size) {
@@ -335,7 +347,7 @@ void check_if_user_has_write_permissions(char *dst, int perms[]) {
 	pw = getpwuid(uid);
 	assert(pw != NULL && "passwd struct (suid) is NULL!");
 
-	// Check if owner has read permissions
+	// Check if owner has write permissions
 	if (perms[1] == 0) {
 		printf("%s is not writable by %s\n", dst, pw->pw_name);
 		exit(-1);
@@ -347,6 +359,27 @@ void create_acl_path(char *src, int src_len, char **acl, int *acl_len) {
 	assert(strncpy((*acl), src, src_len) != NULL);
 	assert(strncat((*acl), ".acl", 4) != NULL);
 	(*acl_len) = src_len + 4;
+}
+
+/**
+	* reference: https://stackoverflow.com/questions/7898215/how-to-clear-input-buffer-in-c
+	*/
+void prompt_to_overwrite(char *path) {
+	char no;
+	int c;
+	printf("Are you sure you want to overwrite %s? (y/n)\n", path);
+	no = fgetc(stdin);
+
+	while (no != 'y' && no != 'n') {
+		printf("please input 'y' or 'n'\n");
+		while ((c = getchar()) != '\n' && c != EOF) {}
+		no = fgetc(stdin);
+	}
+
+	// ascii for n is 110
+	if (no == 110) {
+		exit(-1);
+	}
 }
 
 void make_copy_from_argv(char **path, int *path_len, char **argv, int param) {
@@ -406,19 +439,23 @@ int main(int argc, char **argv) {
 	char *acl_path;
 	char *read_string;
 	char *acl_string;
+	long fsize;
+	long aclsize;
 	int src_len;
 	int dst_len;
 	int acl_path_len;
-	long fsize;
-	long aclsize;
+	int file_exists;
 
 	int src_perms[9] = {0};
 	int dst_perms[9] = {0};
 	int acl_perms[9] = {0};
 
 	// Check that both src and dst are provided
-	if (argc != 3)
+	if (argc != 3) {
+		printf("Usage: get <source> <destination>\n");
 		return -1;
+	}
+
 
 	// REMOVE POWER!!
 	assert(seteuid(getuid()) != -1 && "seteuid(getuid()) failed!"); // getuid() claims to always be successful
@@ -429,6 +466,10 @@ int main(int argc, char **argv) {
 	// Copy destination from argv
 	make_copy_from_argv(&dst, &dst_len, argv, 2);
 
+	// Chech if source correct path
+	check_if_full_path(src);
+	check_if_correct_path(src, 0);
+
 	// Check if source file exists
 	check_if_path_exists(src);
 
@@ -438,13 +479,13 @@ int main(int argc, char **argv) {
 	// Check if owner owns the srouce file
 	check_if_owner_owns_file(src);
 
-	// Chech if source correct path
-	check_if_full_path(src);
-	check_if_correct_path(src, 0);
-
 	// Check if owner has read permissions
-	check_file_permissions(src, src_perms);
-	check_if_owner_has_read_permissions(src, src_perms);
+	file_exists = check_file_permissions(src, src_perms, 0);
+	if (file_exists) {
+		check_if_owner_has_read_permissions(src, src_perms);
+	} else {
+		exit(-1);
+	}
 
 	// Check if acl file exists
 	create_acl_path(src, src_len, &acl_path, &acl_path_len);
@@ -453,9 +494,14 @@ int main(int argc, char **argv) {
 	// Check if owner owns the acl file
 	check_if_owner_owns_file(acl_path);
 
+
 	// Check if acl has group or world permissions set
-	check_file_permissions(acl_path, acl_perms);
-	check_if_acl_has_group_or_world_permissions(acl_path, acl_perms);
+	file_exists = check_file_permissions(acl_path, acl_perms, 0);
+	if (file_exists) {
+		check_if_acl_has_group_or_world_permissions(acl_path, acl_perms);
+	} else {
+		exit(-1);
+	}
 
 	// Open acl file
 	open_file(acl_path, "r", &aclptr);
@@ -484,6 +530,10 @@ int main(int argc, char **argv) {
 	// Close source file;
 	assert(fclose(fptr) == 0 && "fclose failed!");
 
+	// Check if destination is correct path
+	check_if_full_path(dst);
+	check_if_correct_path(dst, 1);
+
 	// Check if source file exists
 	check_if_path_exists(dst);
 
@@ -493,16 +543,15 @@ int main(int argc, char **argv) {
 	// Check if destination path ends with "/"
 	add_forward_slash(&dst, &dst_len);
 
-	// Check if destination is correct path
-	check_if_full_path(dst);
-	check_if_correct_path(dst, 1);
-
-	// Check if user has write permissions
-	check_file_permissions(dst, dst_perms);
-	check_if_user_has_write_permissions(dst, dst_perms);
-
 	// Append filename to destination path
 	append_filename_to_destination(&src, src_len, &dst, dst_len);
+
+	// Check if user has write permissions
+	file_exists = check_file_permissions(dst, dst_perms, 1);
+	if (file_exists) {
+		check_if_user_has_write_permissions(dst, dst_perms);
+		prompt_to_overwrite(dst);
+	}
 
 	// Open destination file
 	open_file_unprivileged(dst, "w", &fptr);
